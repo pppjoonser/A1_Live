@@ -7,6 +7,7 @@
 #include "InputMappingContext.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Animation/A1MyAnimInstance.h"
 // Sets default values
 AA1Character::AA1Character()
 {
@@ -34,6 +35,12 @@ void AA1Character::BeginPlay()
 		{
 			Subsystem->AddMappingContext(IMCShoulder, 0);
 		}
+	}
+
+	A1AnimInstance = Cast<UA1MyAnimInstance>(GetMesh()->GetAnimInstance());
+	if (A1AnimInstance)
+	{
+		A1AnimInstance->OnMontageEnded.AddDynamic(this, &AA1Character::OnAttackMontaageEnded);
 	}
 }
 
@@ -65,6 +72,13 @@ void AA1Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 void AA1Character::Input_Attack(const FInputActionValue& InputValue)
 {
 	GEngine->AddOnScreenDebugMessage(-1, 1.0f, FColor::Blue, TEXT("Attack"));
+	if (bIsAttacking)
+		return;
+	bIsAttacking = true;
+	if (A1AnimInstance)
+	{
+		A1AnimInstance->PlayAttackMontage();
+	}
 }
 
 void AA1Character::Input_Look(const FInputActionValue& InputValue)
@@ -84,5 +98,10 @@ void AA1Character::Input_Move(const FInputActionValue& InputValue)
 	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 	AddMovementInput(ForwardDiredction, MovementVector.X);
 	AddMovementInput(RightDirection, MovementVector.Y);
+}
+
+void AA1Character::OnAttackMontaageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	bIsAttacking = false;
 }
 

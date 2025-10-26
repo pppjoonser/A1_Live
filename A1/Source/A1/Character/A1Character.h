@@ -41,6 +41,17 @@ public:
 	void Input_Attack(const FInputActionValue& InputValue);
 	void Input_Look(const FInputActionValue& InputValue);
 	void Input_Move(const FInputActionValue& InputValue);
+
+public:
+	UFUNCTION()
+	void OnAttackMontaageEnded(UAnimMontage* Montage, bool bInterrupted);
+protected:
+	UPROPERTY()
+	TObjectPtr<class UA1MyAnimInstance> A1AnimInstance;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Attack)
+	uint8 bIsAttacking = false;
+
 protected:
 	UPROPERTY(EditAnywhere, Category = Input)
 	TObjectPtr<UInputMappingContext> IMCShoulder;
