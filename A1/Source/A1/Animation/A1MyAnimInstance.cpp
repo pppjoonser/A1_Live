@@ -45,3 +45,13 @@ void UA1MyAnimInstance::PlayAttackMontage()
 	FName SectionName = FName(*FString::Printf(TEXT("Attack%d"), AttackIndex));
 	Montage_JumpToSection(SectionName, AttackMontage);
 }
+
+void UA1MyAnimInstance::PlaySkillMontage()
+{
+	Montage_Play(SkillMontage, 1.0f);
+}
+
+void UA1MyAnimInstance::PlayDeadMontage()
+{
+	Montage_Play(DeadMontage, 1.0f);
+}

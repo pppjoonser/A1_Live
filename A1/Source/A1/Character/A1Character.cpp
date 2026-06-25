@@ -2,12 +2,18 @@
 
 
 #include "Character/A1Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "InputMappingContext.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Animation/A1MyAnimInstance.h"
+#include "Engine/DamageEvents.h"
+#include "CharacterStat/A1CharacterStatComponent.h"
+#include "Components/WidgetComponent.h"
+#include "UI/A1HpBarWidget.h"
+
 // Sets default values
 AA1Character::AA1Character()
 {
@@ -20,6 +26,16 @@ AA1Character::AA1Character()
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(SpringArm);
+
+	StatComponent = CreateDefaultSubobject<UA1CharacterStatComponent>(TEXT("Stat"));
+	StatComponent->SetMaxHp(100.0f);
+
+	HpBarWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("HpBar"));
+	HpBarWidgetComponent->SetupAttachment(GetMesh());
+	HpBarWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 220.0f));
+	HpBarWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	HpBarWidgetComponent->SetDrawSize(FVector2D(100.0f, 15.0f));
+	HpBarWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 
 // Called when the game starts or when spawned
@@ -35,12 +51,37 @@ void AA1Character::BeginPlay()
 		{
 			Subsystem->AddMappingContext(IMCShoulder, 0);
 		}
+
+		EnableInput(PlayerController);
 	}
 
 	A1AnimInstance = Cast<UA1MyAnimInstance>(GetMesh()->GetAnimInstance());
 	if (A1AnimInstance)
 	{
 		A1AnimInstance->OnMontageEnded.AddDynamic(this, &AA1Character::OnAttackMontaageEnded);
+		A1AnimInstance->OnMontageEnded.AddDynamic(this, &AA1Character::OnSkillMontaageEnded);
+	}
+}
+
+void AA1Character::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	if (StatComponent)
+	{
+		StatComponent->OnHpZero.AddUObject(this, &AA1Character::SetDead);
+	}
+
+	if (HpBarWidgetComponent)
+	{
+		HpBarWidgetComponent->InitWidget();
+
+		UA1HpBarWidget* HpBarWidget = Cast<UA1HpBarWidget>(HpBarWidgetComponent->GetUserWidgetObject());
+		if (HpBarWidget)
+		{
+			HpBarWidget->UpdateHp(StatComponent->GetCurrentHp(), StatComponent->GetMaxHp());
+
+			StatComponent->OnHpChanged.AddUObject(HpBarWidget, &UA1HpBarWidget::UpdateHp);
+		}
 	}
 }
 
@@ -65,16 +106,45 @@ void AA1Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AA1Character::Input_Look);
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AA1Character::Input_Move);
+		EnhancedInputComponent->BindAction(SkillAction, ETriggerEvent::Started, this, &AA1Character::Input_Skill);
 	}
 
+}
+
+float AA1Character::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator , DamageCauser);
+	if (StatComponent)
+	{
+		StatComponent->ApplyDamage(DamageAmount);
+	}
+	return DamageAmount;
+}
+
+void AA1Character::SetDead()
+{
+	SetActorEnableCollision(false);
+
+	if (A1AnimInstance)
+	{
+		A1AnimInstance->PlayDeadMontage();
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	{
+		DisableInput(PlayerController);
+	}
 }
 
 void AA1Character::Input_Attack(const FInputActionValue& InputValue)
 {
 	GEngine->AddOnScreenDebugMessage(-1, 1.0f, FColor::Blue, TEXT("Attack"));
+
 	if (bIsAttacking)
 		return;
+
 	bIsAttacking = true;
+
 	if (A1AnimInstance)
 	{
 		A1AnimInstance->PlayAttackMontage();
@@ -100,8 +170,97 @@ void AA1Character::Input_Move(const FInputActionValue& InputValue)
 	AddMovementInput(RightDirection, MovementVector.Y);
 }
 
+void AA1Character::Input_Skill(const FInputActionValue& InputValue)
+{
+	if (bUseSkill == false)
+		return;
+	bUseSkill = false;
+
+	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+
+	if (A1AnimInstance)
+	{
+		A1AnimInstance->PlaySkillMontage();
+	}
+}
+
 void AA1Character::OnAttackMontaageEnded(UAnimMontage* Montage, bool bInterrupted)
 {
 	bIsAttacking = false;
 }
 
+void AA1Character::OnSkillMontaageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	if (Montage && Montage->GetFName() == TEXT("AM_Skill"))
+	{
+		GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Walking);
+		GetWorld()->GetTimerManager().SetTimer(
+			SkillCoolTimerHandle,
+			FTimerDelegate::CreateLambda(
+				[&]()
+				{
+					bUseSkill = true;
+					GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, TEXT("USE SKill!"));
+				}
+			),
+			SkillCoolTime,
+			false
+		);
+	}
+}
+
+void AA1Character::AttackHitCheck(float AttackRange, float AttackRadius)
+{
+	// 충돌 처리
+	FHitResult OutHitResult;
+	FVector Start = GetActorLocation();
+	FVector End = Start + GetActorForwardVector() * 100.0f;
+	FCollisionQueryParams CollisionParams;
+	CollisionParams.AddIgnoredActor(this);
+
+
+	bool IsHit = GetWorld()->SweepSingleByChannel(OutHitResult, Start, End, FQuat::Identity, ECollisionChannel::ECC_GameTraceChannel2, FCollisionShape::MakeSphere(50.0f), CollisionParams);
+
+	if (IsHit)
+	{
+		const float AttackDamage = 30.0f;
+		if (OutHitResult.GetActor())
+		{
+			FDamageEvent DamageEvent;
+			OutHitResult.GetActor()->TakeDamage(AttackDamage, DamageEvent, GetController(), this);
+		}
+	}
+	                                                                                              
+#if ENABLE_DRAW_DEBUG
+	FVector CapsuleCenter = Start + (End - Start) * 0.5f;
+	float CapsuleHalfHeight = 100.0f;
+	FColor DrawColor = IsHit ? FColor::Green : FColor::Red;
+
+	DrawDebugCapsule(GetWorld(), CapsuleCenter, CapsuleHalfHeight, AttackRadius, FRotationMatrix::MakeFromZ(GetActorForwardVector()).ToQuat(), DrawColor, false, AttackRange);
+#endif
+}
+
+void AA1Character::SkillHitCheck(float SkillRange)
+{
+	TArray<FHitResult> OutHitResults;
+	FVector Origin = GetActorLocation();
+	FCollisionQueryParams CollisionParams;
+	CollisionParams.AddIgnoredActor(this);
+
+	bool bHitResult = GetWorld()->SweepMultiByChannel(OutHitResults, Origin, Origin, FQuat::Identity, ECollisionChannel::ECC_GameTraceChannel2, FCollisionShape::MakeSphere(SkillRange), CollisionParams);
+	if (bHitResult)
+	{
+		for (auto& a : OutHitResults)
+		{
+			const float AttackDamage = 50.0f;
+			if (a.GetActor())
+			{
+				FDamageEvent DamageEvent;
+				a.GetActor()->TakeDamage(AttackDamage, DamageEvent, GetController(), this);
+			}
+		}
+	}
+
+	FColor DrawColor = bHitResult ? FColor::Green : FColor::Red;
+	DrawDebugSphere(GetWorld(), Origin, SkillRange, 16, DrawColor, false, 5.0f);
+}
